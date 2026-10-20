@@ -1,12 +1,28 @@
+-- DashPanelP (LocalScript)
+-- Taruh di StarterPlayerScripts pada game buatanmu sendiri.
+-- Tekan P untuk membuka/menutup panel (fitur ON/OFF + slider kecepatan).
+-- Tahan Q untuk dash (hanya lewat keyboard).
+-- Infinity Jump: lompat berkali-kali di udara.
+-- Instant Prompt: ProximityPrompt tidak perlu ditahan (HoldDuration = 0).
+-- Semua fitur bisa di-ON/OFF di panel.
+
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
+local ProximityPromptService = game:GetService("ProximityPromptService")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 -- ====== PENGATURAN ======
-local dashSpeed = 100   -- kecepatan dash (studs/detik)
+local minSpeed = 20
+local maxSpeed = 300
+local dashSpeed = 100        -- kecepatan awal
+local featureEnabled = true  -- status awal fitur dash
+local infJumpEnabled = false -- status awal infinity jump
+local instantPromptEnabled = false -- status awal instant prompt
+local panelKey = Enum.KeyCode.P
+local dashKey = Enum.KeyCode.Q
 -- ========================
 
 local humanoid, rootPart
@@ -14,95 +30,331 @@ local holding = false
 local dashConn
 local connections = {}
 
--- GUI tombol Dash
+-- ====== GUI UTAMA ======
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "DashGui"
+screenGui.Name = "DashPanelGui"
 screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
 screenGui.Parent = playerGui
 
-local dashButton = Instance.new("TextButton")
-dashButton.Name = "DashButton"
-dashButton.Size = UDim2.new(0, 100, 0, 50)
-dashButton.Position = UDim2.new(1, -110, 1, -240)
-dashButton.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
-dashButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-dashButton.Text = "Dash"
-dashButton.Font = Enum.Font.GothamBold
-dashButton.TextSize = 24
-dashButton.BorderSizePixel = 2
-dashButton.BorderColor3 = Color3.fromRGB(0, 0, 0)
-dashButton.BackgroundTransparency = 0.3
-dashButton.Parent = screenGui
+-- ====== PANEL (dibuka dengan tombol P) ======
+local PANEL_W, PANEL_H = 230, 244
 
--- Mulai dash (saat Q / tombol ditahan)
+local panel = Instance.new("Frame")
+panel.Name = "Panel"
+panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
+panel.AnchorPoint = Vector2.new(0, 0.5)
+panel.Position = UDim2.new(0, 20, 0.5, 0)
+panel.BackgroundColor3 = Color3.fromRGB(25, 28, 40)
+panel.BackgroundTransparency = 0.05
+panel.Visible = false
+panel.Parent = screenGui
+Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 14)
+local panelStroke = Instance.new("UIStroke")
+panelStroke.Color = Color3.fromRGB(90, 110, 255)
+panelStroke.Thickness = 1.5
+panelStroke.Parent = panel
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -20, 0, 28)
+title.Position = UDim2.new(0, 10, 0, 8)
+title.BackgroundTransparency = 1
+title.Text = "PUNYA CRIS"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 16
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = panel
+
+-- Tombol ON/OFF
+local toggleButton = Instance.new("TextButton")
+toggleButton.Size = UDim2.new(1, -20, 0, 36)
+toggleButton.Position = UDim2.new(0, 10, 0, 42)
+toggleButton.Font = Enum.Font.GothamBold
+toggleButton.TextSize = 16
+toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleButton.Parent = panel
+Instance.new("UICorner", toggleButton).CornerRadius = UDim.new(0, 8)
+
+-- Tombol Infinity Jump ON/OFF
+local jumpToggleButton = Instance.new("TextButton")
+jumpToggleButton.Size = UDim2.new(1, -20, 0, 36)
+jumpToggleButton.Position = UDim2.new(0, 10, 0, 154)
+jumpToggleButton.Font = Enum.Font.GothamBold
+jumpToggleButton.TextSize = 16
+jumpToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+jumpToggleButton.Parent = panel
+Instance.new("UICorner", jumpToggleButton).CornerRadius = UDim.new(0, 8)
+
+-- Tombol Instant Prompt ON/OFF
+local promptToggleButton = Instance.new("TextButton")
+promptToggleButton.Size = UDim2.new(1, -20, 0, 36)
+promptToggleButton.Position = UDim2.new(0, 10, 0, 198)
+promptToggleButton.Font = Enum.Font.GothamBold
+promptToggleButton.TextSize = 16
+promptToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+promptToggleButton.Parent = panel
+Instance.new("UICorner", promptToggleButton).CornerRadius = UDim.new(0, 8)
+
+-- Label kecepatan
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Size = UDim2.new(1, -20, 0, 20)
+speedLabel.Position = UDim2.new(0, 10, 0, 86)
+speedLabel.BackgroundTransparency = 1
+speedLabel.TextColor3 = Color3.fromRGB(220, 225, 245)
+speedLabel.Font = Enum.Font.Gotham
+speedLabel.TextSize = 14
+speedLabel.TextXAlignment = Enum.TextXAlignment.Left
+speedLabel.Parent = panel
+
+-- Slider kecepatan
+local track = Instance.new("Frame")
+track.Size = UDim2.new(1, -100, 0, 8)
+track.Position = UDim2.new(0, 45, 0, 123)
+track.BackgroundColor3 = Color3.fromRGB(60, 65, 90)
+track.Parent = panel
+Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
+
+local fill = Instance.new("Frame")
+fill.Size = UDim2.new(0, 0, 1, 0)
+fill.BackgroundColor3 = Color3.fromRGB(90, 130, 255)
+fill.Parent = track
+Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+
+local knob = Instance.new("Frame")
+knob.Size = UDim2.new(0, 20, 0, 20)
+knob.AnchorPoint = Vector2.new(0.5, 0.5)
+knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+knob.Parent = track
+Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+local sliderHit = Instance.new("TextButton")
+sliderHit.Size = UDim2.new(1, 20, 0, 34)
+sliderHit.Position = UDim2.new(0, -10, 0.5, -17)
+sliderHit.BackgroundTransparency = 1
+sliderHit.Text = ""
+sliderHit.Parent = track
+
+local function makeStepButton(text, x)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(0, 30, 0, 30)
+	b.Position = UDim2.new(0, x, 0, 112)
+	b.BackgroundColor3 = Color3.fromRGB(50, 56, 85)
+	b.Text = text
+	b.TextColor3 = Color3.fromRGB(255, 255, 255)
+	b.Font = Enum.Font.GothamBold
+	b.TextSize = 20
+	b.Parent = panel
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+	return b
+end
+local minusButton = makeStepButton("-", 8)
+local plusButton = makeStepButton("+", PANEL_W - 38)
+
+-- ====== LOGIKA DASH ======
 local function startDash()
-    if holding or not humanoid or not rootPart then return end
-    holding = true
+	if not featureEnabled or holding or not humanoid or not rootPart then return end
+	holding = true
 
-    dashButton.BackgroundTransparency = 0.7
+	dashConn = RunService.Heartbeat:Connect(function()
+		if not rootPart or not humanoid or humanoid.Health <= 0 then return end
 
-    dashConn = RunService.Heartbeat:Connect(function()
-        if not rootPart or not humanoid or humanoid.Health <= 0 then return end
+		local dir = humanoid.MoveDirection
+		if dir.Magnitude == 0 then
+			local look = rootPart.CFrame.LookVector
+			dir = Vector3.new(look.X, 0, look.Z)
+			if dir.Magnitude == 0 then return end
+			dir = dir.Unit
+		end
 
-        -- Arah: arah jalan, atau arah hadap karakter jika diam
-        local dir = humanoid.MoveDirection
-        if dir.Magnitude == 0 then
-            local look = rootPart.CFrame.LookVector
-            dir = Vector3.new(look.X, 0, look.Z)
-            if dir.Magnitude == 0 then return end
-            dir = dir.Unit
-        end
-
-        local v = rootPart.AssemblyLinearVelocity
-        rootPart.AssemblyLinearVelocity = Vector3.new(dir.X * dashSpeed, v.Y, dir.Z * dashSpeed)
-    end)
+		local v = rootPart.AssemblyLinearVelocity
+		rootPart.AssemblyLinearVelocity = Vector3.new(dir.X * dashSpeed, v.Y, dir.Z * dashSpeed)
+	end)
 end
 
--- Berhenti dash (saat Q / tombol dilepas)
 local function stopDash()
-    holding = false
-    dashButton.BackgroundTransparency = 0.3
-    if dashConn then
-        dashConn:Disconnect()
-        dashConn = nil
-    end
+	holding = false
+	if dashConn then
+		dashConn:Disconnect()
+		dashConn = nil
+	end
 end
 
--- Setup karakter (dipanggil saat spawn / respawn)
-local function setupCharacter(char)
-    stopDash()
-    for _, conn in ipairs(connections) do
-        conn:Disconnect()
-    end
-    connections = {}
+-- ====== INSTANT PROMPT ======
+-- Membuat ProximityPrompt langsung aktif tanpa ditahan (HoldDuration = 0).
+-- Nilai asli disimpan supaya bisa dikembalikan saat fitur dimatikan.
+local originalHold = setmetatable({}, {__mode = "k"})
+local refreshPromptToggle -- dideklarasikan dulu, diisi di bagian UPDATE TAMPILAN
 
-    humanoid = char:WaitForChild("Humanoid")
-    rootPart = char:WaitForChild("HumanoidRootPart")
-
-    -- Hentikan dash jika karakter mati
-    table.insert(connections, humanoid.Died:Connect(stopDash))
+local function applyInstant(prompt)
+	if originalHold[prompt] == nil then
+		originalHold[prompt] = prompt.HoldDuration
+	end
+	prompt.HoldDuration = 0
 end
 
--- Input tombol di layar (mobile / klik)
-dashButton.MouseButton1Down:Connect(startDash)
-dashButton.MouseButton1Up:Connect(stopDash)
+ProximityPromptService.PromptShown:Connect(function(prompt)
+	if instantPromptEnabled then
+		applyInstant(prompt)
+	end
+end)
 
--- Input keyboard: tahan Q = ON, lepas Q = OFF
+local function setInstantPrompt(on)
+	instantPromptEnabled = on
+	if on then
+		for _, obj in ipairs(workspace:GetDescendants()) do
+			if obj:IsA("ProximityPrompt") then
+				applyInstant(obj)
+			end
+		end
+	else
+		for prompt, duration in pairs(originalHold) do
+			if prompt.Parent then
+				prompt.HoldDuration = duration
+			end
+			originalHold[prompt] = nil
+		end
+	end
+	refreshPromptToggle()
+end
+
+-- ====== UPDATE TAMPILAN ======
+local function refreshToggle()
+	if featureEnabled then
+		toggleButton.Text = "Dash: ON"
+		toggleButton.BackgroundColor3 = Color3.fromRGB(40, 170, 90)
+	else
+		toggleButton.Text = "Dash: OFF"
+		toggleButton.BackgroundColor3 = Color3.fromRGB(190, 60, 60)
+	end
+end
+
+local function refreshJumpToggle()
+	if infJumpEnabled then
+		jumpToggleButton.Text = "Infinity Jump: ON"
+		jumpToggleButton.BackgroundColor3 = Color3.fromRGB(40, 170, 90)
+	else
+		jumpToggleButton.Text = "Infinity Jump: OFF"
+		jumpToggleButton.BackgroundColor3 = Color3.fromRGB(190, 60, 60)
+	end
+end
+
+refreshPromptToggle = function()
+	if instantPromptEnabled then
+		promptToggleButton.Text = "Instant Prompt: ON"
+		promptToggleButton.BackgroundColor3 = Color3.fromRGB(40, 170, 90)
+	else
+		promptToggleButton.Text = "Instant Prompt: OFF"
+		promptToggleButton.BackgroundColor3 = Color3.fromRGB(190, 60, 60)
+	end
+end
+
+local function refreshSpeed()
+	local alpha = (dashSpeed - minSpeed) / (maxSpeed - minSpeed)
+	fill.Size = UDim2.new(alpha, 0, 1, 0)
+	knob.Position = UDim2.new(alpha, 0, 0.5, 0)
+	speedLabel.Text = "Kecepatan: " .. tostring(dashSpeed)
+end
+
+local function setSpeed(value)
+	dashSpeed = math.clamp(math.floor(value + 0.5), minSpeed, maxSpeed)
+	refreshSpeed()
+end
+
+local function setFeature(on)
+	featureEnabled = on
+	if not on then stopDash() end
+	refreshToggle()
+end
+
+-- ====== INTERAKSI PANEL ======
+toggleButton.MouseButton1Click:Connect(function()
+	setFeature(not featureEnabled)
+end)
+
+jumpToggleButton.MouseButton1Click:Connect(function()
+	infJumpEnabled = not infJumpEnabled
+	refreshJumpToggle()
+end)
+
+promptToggleButton.MouseButton1Click:Connect(function()
+	setInstantPrompt(not instantPromptEnabled)
+end)
+
+minusButton.MouseButton1Click:Connect(function() setSpeed(dashSpeed - 10) end)
+plusButton.MouseButton1Click:Connect(function() setSpeed(dashSpeed + 10) end)
+
+local sliding = false
+local function updateSliderFromX(x)
+	local alpha = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+	setSpeed(minSpeed + alpha * (maxSpeed - minSpeed))
+end
+
+sliderHit.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+		sliding = true
+		updateSliderFromX(input.Position.X)
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if sliding and (input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch) then
+		updateSliderFromX(input.Position.X)
+	end
+end)
+
+-- ====== INPUT KEYBOARD ======
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    if input.KeyCode == Enum.KeyCode.Q then
-        startDash()
-    end
+	if gameProcessed then return end
+
+	if input.KeyCode == panelKey then
+		panel.Visible = not panel.Visible   -- P: buka/tutup panel
+	elseif input.KeyCode == dashKey then
+		startDash()                         -- tahan Q: dash ON
+	end
 end)
 
 UserInputService.InputEnded:Connect(function(input)
-    if input.KeyCode == Enum.KeyCode.Q then
-        stopDash()
-    end
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+		sliding = false
+	end
+	if input.KeyCode == dashKey then
+		stopDash()                          -- lepas Q: dash OFF
+	end
 end)
 
--- Setup karakter
+-- ====== INFINITY JUMP ======
+-- JumpRequest aktif untuk tombol Space maupun tombol lompat di mobile
+UserInputService.JumpRequest:Connect(function()
+	if infJumpEnabled and humanoid and humanoid.Health > 0 then
+		humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+	end
+end)
+
+-- ====== SETUP KARAKTER ======
+local function setupCharacter(char)
+	stopDash()
+	for _, conn in ipairs(connections) do
+		conn:Disconnect()
+	end
+	connections = {}
+
+	humanoid = char:WaitForChild("Humanoid")
+	rootPart = char:WaitForChild("HumanoidRootPart")
+
+	table.insert(connections, humanoid.Died:Connect(stopDash))
+end
+
 player.CharacterAdded:Connect(setupCharacter)
 if player.Character then
-    setupCharacter(player.Character)
+	setupCharacter(player.Character)
 end
+
+-- Tampilan awal
+refreshToggle()
+refreshJumpToggle()
+refreshPromptToggle()
+refreshSpeed()
