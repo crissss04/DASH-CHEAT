@@ -4,7 +4,8 @@
 -- Tahan Q untuk dash (hanya lewat keyboard).
 -- Infinity Jump: lompat berkali-kali di udara.
 -- Instant Prompt: ProximityPrompt tidak perlu ditahan (HoldDuration = 0).
--- Semua fitur bisa di-ON/OFF di panel.
+-- Zoom Out: atur jarak zoom-out kamera maksimal lewat slider.
+-- Semua fitur bisa diatur di panel.
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -21,6 +22,8 @@ local dashSpeed = 100        -- kecepatan awal
 local featureEnabled = true  -- status awal fitur dash
 local infJumpEnabled = false -- status awal infinity jump
 local instantPromptEnabled = false -- status awal instant prompt
+local zoomMinValue = 50   -- batas bawah slider zoom out
+local zoomMaxValue = 1000 -- batas atas slider zoom out (zoom out maksimal)
 local panelKey = Enum.KeyCode.P
 local dashKey = Enum.KeyCode.Q
 -- ========================
@@ -38,7 +41,7 @@ screenGui.IgnoreGuiInset = true
 screenGui.Parent = playerGui
 
 -- ====== PANEL (dibuka dengan tombol P) ======
-local PANEL_W, PANEL_H = 230, 244
+local PANEL_W, PANEL_H = 230, 308
 
 local panel = Instance.new("Frame")
 panel.Name = "Panel"
@@ -59,7 +62,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -20, 0, 28)
 title.Position = UDim2.new(0, 10, 0, 8)
 title.BackgroundTransparency = 1
-title.Text = "PUNYA CRIS"
+title.Text = "DASH  [P] tutup"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
@@ -135,10 +138,10 @@ sliderHit.BackgroundTransparency = 1
 sliderHit.Text = ""
 sliderHit.Parent = track
 
-local function makeStepButton(text, x)
+local function makeStepButton(text, x, y)
 	local b = Instance.new("TextButton")
 	b.Size = UDim2.new(0, 30, 0, 30)
-	b.Position = UDim2.new(0, x, 0, 112)
+	b.Position = UDim2.new(0, x, 0, y or 112)
 	b.BackgroundColor3 = Color3.fromRGB(50, 56, 85)
 	b.Text = text
 	b.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -151,13 +154,62 @@ end
 local minusButton = makeStepButton("-", 8)
 local plusButton = makeStepButton("+", PANEL_W - 38)
 
+-- Zoom Out: label + slider + tombol -/+
+local zoomLabel = Instance.new("TextLabel")
+zoomLabel.Size = UDim2.new(1, -20, 0, 20)
+zoomLabel.Position = UDim2.new(0, 10, 0, 244)
+zoomLabel.BackgroundTransparency = 1
+zoomLabel.TextColor3 = Color3.fromRGB(220, 225, 245)
+zoomLabel.Font = Enum.Font.Gotham
+zoomLabel.TextSize = 14
+zoomLabel.TextXAlignment = Enum.TextXAlignment.Left
+zoomLabel.Parent = panel
+
+local zoomTrack = Instance.new("Frame")
+zoomTrack.Size = UDim2.new(1, -100, 0, 8)
+zoomTrack.Position = UDim2.new(0, 45, 0, 281)
+zoomTrack.BackgroundColor3 = Color3.fromRGB(60, 65, 90)
+zoomTrack.Parent = panel
+Instance.new("UICorner", zoomTrack).CornerRadius = UDim.new(1, 0)
+
+local zoomFill = Instance.new("Frame")
+zoomFill.Size = UDim2.new(0, 0, 1, 0)
+zoomFill.BackgroundColor3 = Color3.fromRGB(90, 130, 255)
+zoomFill.Parent = zoomTrack
+Instance.new("UICorner", zoomFill).CornerRadius = UDim.new(1, 0)
+
+local zoomKnob = Instance.new("Frame")
+zoomKnob.Size = UDim2.new(0, 20, 0, 20)
+zoomKnob.AnchorPoint = Vector2.new(0.5, 0.5)
+zoomKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+zoomKnob.Parent = zoomTrack
+Instance.new("UICorner", zoomKnob).CornerRadius = UDim.new(1, 0)
+
+local zoomHit = Instance.new("TextButton")
+zoomHit.Size = UDim2.new(1, 20, 0, 34)
+zoomHit.Position = UDim2.new(0, -10, 0.5, -17)
+zoomHit.BackgroundTransparency = 1
+zoomHit.Text = ""
+zoomHit.Parent = zoomTrack
+
+local zoomMinusButton = makeStepButton("-", 8, 270)
+local zoomPlusButton = makeStepButton("+", PANEL_W - 38, 270)
+
 -- ====== LOGIKA DASH ======
+local stopDash -- dideklarasikan dulu karena dipakai di dalam startDash
+
 local function startDash()
 	if not featureEnabled or holding or not humanoid or not rootPart then return end
 	holding = true
 
 	dashConn = RunService.Heartbeat:Connect(function()
 		if not rootPart or not humanoid or humanoid.Health <= 0 then return end
+
+		-- Pengaman: kalau Q sudah dilepas tapi event lepasnya terlewat, hentikan dash
+		if not UserInputService:IsKeyDown(dashKey) then
+			stopDash()
+			return
+		end
 
 		local dir = humanoid.MoveDirection
 		if dir.Magnitude == 0 then
@@ -172,7 +224,7 @@ local function startDash()
 	end)
 end
 
-local function stopDash()
+stopDash = function()
 	holding = false
 	if dashConn then
 		dashConn:Disconnect()
@@ -267,6 +319,40 @@ local function setFeature(on)
 	refreshToggle()
 end
 
+-- ====== ZOOM OUT ======
+-- Mengatur CameraMaxZoomDistance (seberapa jauh kamera bisa di-zoom out dengan scroll/pinch)
+local zoomDistance = math.clamp(player.CameraMaxZoomDistance, zoomMinValue, zoomMaxValue)
+local slidingZoom = false
+
+local function refreshZoom()
+	local alpha = (zoomDistance - zoomMinValue) / (zoomMaxValue - zoomMinValue)
+	zoomFill.Size = UDim2.new(alpha, 0, 1, 0)
+	zoomKnob.Position = UDim2.new(alpha, 0, 0.5, 0)
+	zoomLabel.Text = "Zoom Out: " .. tostring(zoomDistance)
+end
+
+local function setZoom(value)
+	zoomDistance = math.clamp(math.floor(value + 0.5), zoomMinValue, zoomMaxValue)
+	player.CameraMaxZoomDistance = zoomDistance
+	refreshZoom()
+end
+
+local function updateZoomFromX(x)
+	local alpha = math.clamp((x - zoomTrack.AbsolutePosition.X) / zoomTrack.AbsoluteSize.X, 0, 1)
+	setZoom(zoomMinValue + alpha * (zoomMaxValue - zoomMinValue))
+end
+
+zoomHit.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+		slidingZoom = true
+		updateZoomFromX(input.Position.X)
+	end
+end)
+
+zoomMinusButton.MouseButton1Click:Connect(function() setZoom(zoomDistance - 25) end)
+zoomPlusButton.MouseButton1Click:Connect(function() setZoom(zoomDistance + 25) end)
+
 -- ====== INTERAKSI PANEL ======
 toggleButton.MouseButton1Click:Connect(function()
 	setFeature(not featureEnabled)
@@ -299,15 +385,19 @@ sliderHit.InputBegan:Connect(function(input)
 end)
 
 UserInputService.InputChanged:Connect(function(input)
-	if sliding and (input.UserInputType == Enum.UserInputType.MouseMovement
-		or input.UserInputType == Enum.UserInputType.Touch) then
-		updateSliderFromX(input.Position.X)
+	if input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch then
+		if sliding then updateSliderFromX(input.Position.X) end
+		if slidingZoom then updateZoomFromX(input.Position.X) end
 	end
 end)
 
 -- ====== INPUT KEYBOARD ======
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed then return end
+UserInputService.InputBegan:Connect(function(input)
+	-- gameProcessed sengaja TIDAK dipakai: kalau Q/P juga dipakai fitur lain
+	-- (misalnya ProximityPrompt dengan tombol Q), Roblox menandainya "sudah diproses"
+	-- dan dash tidak akan jalan. Yang diblokir hanya saat sedang mengetik di chat/TextBox.
+	if UserInputService:GetFocusedTextBox() then return end
 
 	if input.KeyCode == panelKey then
 		panel.Visible = not panel.Visible   -- P: buka/tutup panel
@@ -320,6 +410,7 @@ UserInputService.InputEnded:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1
 		or input.UserInputType == Enum.UserInputType.Touch then
 		sliding = false
+		slidingZoom = false
 	end
 	if input.KeyCode == dashKey then
 		stopDash()                          -- lepas Q: dash OFF
@@ -345,6 +436,9 @@ local function setupCharacter(char)
 	humanoid = char:WaitForChild("Humanoid")
 	rootPart = char:WaitForChild("HumanoidRootPart")
 
+	-- Terapkan ulang zoom out (jaga-jaga kalau script kamera game mereset)
+	player.CameraMaxZoomDistance = zoomDistance
+
 	table.insert(connections, humanoid.Died:Connect(stopDash))
 end
 
@@ -358,3 +452,4 @@ refreshToggle()
 refreshJumpToggle()
 refreshPromptToggle()
 refreshSpeed()
+refreshZoom()
