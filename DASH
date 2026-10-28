@@ -6,11 +6,13 @@
 -- Instant Prompt: ProximityPrompt tidak perlu ditahan (HoldDuration = 0).
 -- Zoom Out: atur jarak zoom-out kamera maksimal lewat slider.
 -- Semua fitur bisa diatur di panel.
+-- Auto save: pengaturan disimpan otomatis (butuh DashConfigServer di ServerScriptService).
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local ProximityPromptService = game:GetService("ProximityPromptService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -32,6 +34,36 @@ local humanoid, rootPart
 local holding = false
 local dashConn
 local connections = {}
+
+-- ====== AUTO SAVE ======
+-- Config dikirim ke server (DataStore) 1.5 detik setelah perubahan terakhir.
+local configReady = false    -- true setelah config berhasil dimuat dari server
+local loadingConfig = false  -- true saat menerapkan config yang dimuat (jangan simpan ulang)
+local saveToken = 0
+local zoomDistance = 128 -- nilai asli diisi di bagian ZOOM OUT
+
+local function buildConfig()
+	return {
+		dashSpeed = dashSpeed,
+		dashEnabled = featureEnabled,
+		infJump = infJumpEnabled,
+		instantPrompt = instantPromptEnabled,
+		zoom = zoomDistance,
+	}
+end
+
+local function markDirty()
+	if loadingConfig or not configReady then return end
+	saveToken += 1
+	local myToken = saveToken
+	task.delay(1.5, function()
+		if myToken ~= saveToken then return end -- ada perubahan lebih baru, tunggu yang itu
+		local remote = ReplicatedStorage:FindFirstChild("DashConfigSave")
+		if remote then
+			remote:FireServer(buildConfig())
+		end
+	end)
+end
 
 -- ====== GUI UTAMA ======
 local screenGui = Instance.new("ScreenGui")
@@ -62,7 +94,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -20, 0, 28)
 title.Position = UDim2.new(0, 10, 0, 8)
 title.BackgroundTransparency = 1
-title.Text = "DASH  [P] tutup"
+title.Text = "PUNYA CRIS"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
@@ -268,6 +300,7 @@ local function setInstantPrompt(on)
 		end
 	end
 	refreshPromptToggle()
+	markDirty()
 end
 
 -- ====== UPDATE TAMPILAN ======
@@ -311,17 +344,21 @@ end
 local function setSpeed(value)
 	dashSpeed = math.clamp(math.floor(value + 0.5), minSpeed, maxSpeed)
 	refreshSpeed()
+	markDirty()
 end
 
 local function setFeature(on)
 	featureEnabled = on
 	if not on then stopDash() end
 	refreshToggle()
+	markDirty()
 end
 
 -- ====== ZOOM OUT ======
 -- Mengatur CameraMaxZoomDistance (seberapa jauh kamera bisa di-zoom out dengan scroll/pinch)
-local zoomDistance = math.clamp(player.CameraMaxZoomDistance, zoomMinValue, zoomMaxValue)
+zoomDistance = math.clamp(player.CameraMaxZoomDistance, zoomMinValue, zoomMaxValue)
+local zoomUserSet = false                        -- true setelah zoom diatur lewat panel/config
+local originalMinZoom = player.CameraMinZoomDistance
 local slidingZoom = false
 
 local function refreshZoom()
@@ -333,8 +370,10 @@ end
 
 local function setZoom(value)
 	zoomDistance = math.clamp(math.floor(value + 0.5), zoomMinValue, zoomMaxValue)
+	zoomUserSet = true
 	player.CameraMaxZoomDistance = zoomDistance
 	refreshZoom()
+	markDirty()
 end
 
 local function updateZoomFromX(x)
@@ -353,6 +392,23 @@ end)
 zoomMinusButton.MouseButton1Click:Connect(function() setZoom(zoomDistance - 25) end)
 zoomPlusButton.MouseButton1Click:Connect(function() setZoom(zoomDistance + 25) end)
 
+-- Pertahankan zoom: script kendaraan/kamera game sering mereset batas zoom saat duduk di mobil.
+-- Setiap batas zoom diubah script lain, nilai kita dipasang lagi.
+local function enforceZoom()
+	if not zoomUserSet then return end
+	if player.CameraMaxZoomDistance ~= zoomDistance then
+		player.CameraMaxZoomDistance = zoomDistance
+	end
+	-- Jika game mengunci jarak minimum (min = max) sehingga zoom tidak bisa digeser, kembalikan
+	if player.CameraMinZoomDistance > originalMinZoom then
+		player.CameraMinZoomDistance = originalMinZoom
+	end
+end
+
+player:GetPropertyChangedSignal("CameraMaxZoomDistance"):Connect(enforceZoom)
+player:GetPropertyChangedSignal("CameraMinZoomDistance"):Connect(enforceZoom)
+RunService.RenderStepped:Connect(enforceZoom) -- jaga-jaga jika perubahan terjadi tanpa memicu event
+
 -- ====== INTERAKSI PANEL ======
 toggleButton.MouseButton1Click:Connect(function()
 	setFeature(not featureEnabled)
@@ -361,6 +417,7 @@ end)
 jumpToggleButton.MouseButton1Click:Connect(function()
 	infJumpEnabled = not infJumpEnabled
 	refreshJumpToggle()
+	markDirty()
 end)
 
 promptToggleButton.MouseButton1Click:Connect(function()
@@ -453,3 +510,33 @@ refreshJumpToggle()
 refreshPromptToggle()
 refreshSpeed()
 refreshZoom()
+
+-- ====== MUAT CONFIG TERSIMPAN ======
+task.spawn(function()
+	local getFn = ReplicatedStorage:WaitForChild("DashConfigGet", 10)
+	if not getFn then
+		warn("[DashPanel] DashConfigGet tidak ditemukan. Pastikan DashConfigServer ada di ServerScriptService. Auto save nonaktif.")
+		return
+	end
+
+	local ok, data = pcall(function()
+		return getFn:InvokeServer()
+	end)
+	if not ok or type(data) ~= "table" then
+		warn("[DashPanel] Gagal memuat config:", data)
+		return
+	end
+
+	loadingConfig = true
+	if type(data.dashSpeed) == "number" then setSpeed(data.dashSpeed) end
+	if type(data.dashEnabled) == "boolean" then setFeature(data.dashEnabled) end
+	if type(data.infJump) == "boolean" then
+		infJumpEnabled = data.infJump
+		refreshJumpToggle()
+	end
+	if type(data.instantPrompt) == "boolean" then setInstantPrompt(data.instantPrompt) end
+	if type(data.zoom) == "number" then setZoom(data.zoom) end
+	loadingConfig = false
+
+	configReady = true -- mulai dari sini perubahan akan disimpan otomatis
+end)
